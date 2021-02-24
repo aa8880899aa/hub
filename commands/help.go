@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
+	"github.com/cli/safeexec"
 	"github.com/github/hub/v2/git"
 	"github.com/github/hub/v2/ui"
 	"github.com/github/hub/v2/utils"
@@ -62,7 +64,7 @@ func runHelp(helpCmd *Command, args *Args) {
 	p.RegisterBool("--plain-text")
 	p.RegisterBool("--man", "-m")
 	p.RegisterBool("--web", "-w")
-	p.Parse(args.Params)
+	_, _ = p.Parse(args.Params)
 
 	if p.Bool("--all") {
 		args.AfterFn(func() error {
@@ -81,6 +83,9 @@ func runHelp(helpCmd *Command, args *Args) {
 		}
 		if f, err := git.Config("help.format"); err == nil {
 			return f == "web" || f == "html"
+		}
+		if runtime.GOOS == "windows" {
+			return true
 		}
 		return false
 	}
@@ -174,7 +179,12 @@ func displayManPage(manPage string, args *Args, isWeb bool) error {
 		env = append(env, fmt.Sprintf("MANPATH=%s:%s", manPath, os.Getenv("MANPATH")))
 	}
 
-	c := exec.Command(manArgs[0], manArgs[1:]...)
+	manBinary, err := safeexec.LookPath(manArgs[0])
+	if err != nil {
+		return err
+	}
+
+	c := exec.Command(manBinary, manArgs[1:]...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

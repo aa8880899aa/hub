@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/cli/safeexec"
 	"github.com/github/hub/v2/ui"
 )
 
@@ -49,9 +50,21 @@ func (cmd *Cmd) WithArgs(args ...string) *Cmd {
 	return cmd
 }
 
+func (cmd *Cmd) makeExecCmd() (*exec.Cmd, error) {
+	binary, err := safeexec.LookPath(cmd.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return exec.Command(binary, cmd.Args...), nil
+}
+
 func (cmd *Cmd) Output() (string, error) {
 	verboseLog(cmd)
-	c := exec.Command(cmd.Name, cmd.Args...)
+	c, err := cmd.makeExecCmd()
+	if err != nil {
+		return "", err
+	}
 	c.Stderr = cmd.Stderr
 	output, err := c.Output()
 
@@ -60,15 +73,18 @@ func (cmd *Cmd) Output() (string, error) {
 
 func (cmd *Cmd) CombinedOutput() (string, error) {
 	verboseLog(cmd)
-	output, err := exec.Command(cmd.Name, cmd.Args...).CombinedOutput()
-
+	c, err := cmd.makeExecCmd()
+	if err != nil {
+		return "", err
+	}
+	output, err := c.CombinedOutput()
 	return string(output), err
 }
 
 func (cmd *Cmd) Success() bool {
 	verboseLog(cmd)
-	err := exec.Command(cmd.Name, cmd.Args...).Run()
-	return err == nil
+	c, err := cmd.makeExecCmd()
+	return err == nil && c.Run() == nil
 }
 
 // Run runs command with `Exec` on platforms except Windows
@@ -93,8 +109,8 @@ func detectWSL() bool {
 		b := make([]byte, 1024)
 		f, err := os.Open("/proc/version")
 		if err == nil {
-			f.Read(b)
-			f.Close()
+			_, _ = f.Read(b)
+			_ = f.Close()
 			detectedWSLContents = string(b)
 		}
 		detectedWSL = true
@@ -105,7 +121,10 @@ func detectWSL() bool {
 // Spawn runs command with spawn(3)
 func (cmd *Cmd) Spawn() error {
 	verboseLog(cmd)
-	c := exec.Command(cmd.Name, cmd.Args...)
+	c, err := cmd.makeExecCmd()
+	if err != nil {
+		return err
+	}
 	c.Stdin = cmd.Stdin
 	c.Stdout = cmd.Stdout
 	c.Stderr = cmd.Stderr
@@ -118,7 +137,7 @@ func (cmd *Cmd) Spawn() error {
 func (cmd *Cmd) Exec() error {
 	verboseLog(cmd)
 
-	binary, err := exec.LookPath(cmd.Name)
+	binary, err := safeexec.LookPath(cmd.Name)
 	if err != nil {
 		return &exec.Error{
 			Name: cmd.Name,
@@ -150,7 +169,10 @@ func verboseLog(cmd *Cmd) {
 	if os.Getenv("HUB_VERBOSE") != "" {
 		msg := fmt.Sprintf("$ %s", cmd.String())
 		if ui.IsTerminal(os.Stderr) {
-			msg = fmt.Sprintf("\033[35m%s\033[0m", msg)
+			// bizarre: color `35` does not display at all in PowerShell (it does in Windows Terminal), but
+			// using `35;1` works around that
+			color := "35;1"
+			msg = fmt.Sprintf("\033[%sm%s\033[m", color, msg)
 		}
 		ui.Errorln(msg)
 	}
